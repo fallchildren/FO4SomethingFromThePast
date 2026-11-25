@@ -1,0 +1,120 @@
+name: release
+
+on:
+  push:
+    tags:
+      - '[0-9]*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Test version (blank = 1.1.0-test.<run number>)'
+        required: false
+        type: string
+      upload_to_nexus:
+        description: 'Upload a new file version to Nexus (does not publish the mod page)'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Check out verified fo4tools
+        uses: actions/checkout@v6
+        with:
+          repository: fallchildren/fo4tools
+          ref: 8278c44e3c26851a021f441e0c1f092146852103
+          path: build/fo4tools
+          persist-credentials: false
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full
+
+      - name: Select and validate version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="${REQUESTED_VERSION:-1.1.0-test.${GITHUB_RUN_NUMBER}}"
+          fi
+          if [[ ! "$version" =~ ^[0-9][0-9A-Za-z.+-]*$ ]]; then
+            echo 'Invalid version: use a leading digit and only letters, digits, dots, + or -.' >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build and verify release package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: make package VERSION="$VERSION" FO4TOOLS_ROOT=build/fo4tools
+
+      - name: Retain package for inspection and upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: somethingfromthepast-${{ steps.version.outputs.version }}
+          path: dist/somethingfromthepast-${{ steps.version.outputs.version }}.7z
+          if-no-files-found: error
+          compression-level: 0
+
+  nexus:
+    needs: build
+    if: github.event_name == 'push' || inputs.upload_to_nexus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: somethingfromthepast-${{ needs.build.outputs.version }}
+          path: dist
+
+      - name: Check Nexus credential is configured
+        env:
+          NEXUS_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+        run: |
+          if [ -z "$NEXUS_KEY" ]; then
+            echo 'Configure the NEXUSMODS_API_KEY repository secret before uploading.' >&2
+            exit 1
+          fi
+
+      - name: Upload file version to Nexus Mods
+        id: upload
+        uses: Nexus-Mods/upload-action@v1.0.0-beta.11
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: '8446437'
+          mod_id: '4943507469474'
+          filename: dist/somethingfromthepast-${{ needs.build.outputs.version }}.7z
+          version: ${{ needs.build.outputs.version }}
+          display_name: Something from the Past
+          category: main
+          archive_existing_version: false
+          primary_mod_manager_download: ${{ github.event_name == 'push' }}
+          allow_mod_manager_download: true
+          update_mod_version: ${{ github.event_name == 'push' }}
+
+      - name: Record uploaded version
+        env:
+          VERSION_ID: ${{ steps.upload.outputs.version_id }}
+        run: echo "Uploaded Nexus file version ID $VERSION_ID" >> "$GITHUB_STEP_SUMMARY"

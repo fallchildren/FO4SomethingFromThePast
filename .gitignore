@@ -1,0 +1,8 @@
+build/
+__pycache__/
+*.pyc
+
+dist/
+
+Data/Scripts/*.pex
+Data/Scripts/*.psc

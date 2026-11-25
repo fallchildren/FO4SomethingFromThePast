@@ -1,0 +1,728 @@
+;; Something From The Past
+;;
+;; Side quest for fallchildrens_ncr_armor_redux.esp.  (The script keeps its original
+;; name, fcNCR_HandMeDown, because a script's name is stored in saves; renaming it would
+;; orphan the instance in a save that already ran the first version.)
+;;
+;;   1. Places the hunt objects by script, without cell/worldspace overrides.
+;;      This still requires vanilla placement surfaces; local redesigns need patches.
+;;        - seven paper letters, including the Sanctuary built-in kitchen counter;
+;;          an old uncollected mailbox copy is retired after a replacement exists
+;;        - the coat and helmet, loose on the Natick hillside dryer (0018B8BE)
+;;        - the log, loose on the changing table (0018BAE8)
+;;        - one shovel, on the floor by the dryer/washer
+;;   2. Tracks finds, optional onward breadcrumbs, journal history and one-time XP.
+;;
+;; Progress is detected by asking what the player carries (poll()), not by inventory
+;; events: AddInventoryEventFilter on a quest script did not deliver the player's pickups
+;; (picking up the letter advanced nothing), so the event handlers below are only a fast
+;; path and every pickup stage is also reached by polling.
+;;
+;; Natick uses retained loose references, not respawning container inventories. Legacy
+;; uncollected container copies are dropped and moved, preserving their instance data.
+;; Collected facts remain quest stages; placement flags/references are saved variables.
+;; This is the complete canonical source; no generation/augmentation step is needed.
+;;
+;; Progress facts:
+;;
+;;    5  the letter has been placed (legacy marker; kitchen placement uses stage 10 check)
+;;   10  the player has the Sanctuary letter
+;;   11  Abernathy Farm letter          12  Concord museum letter
+;;   13  Graygarden letter              14  Cambridge police station letter
+;;   16  Diamond City letter            17  Fort Hagen letter
+;;   15  the player has arrived in Natick Banks (only counted once the letter is read)
+;;   20  the player has the coat from the dryer top
+;;   25  the player has the helmet from the dryer top
+;;   30  the player has the log from the changing table
+;;   40  quest finished, XP paid (guards the reward so it can never repeat)
+;;
+;; Objectives:  10 find the house in Natick   (done by stage 15 or 20)
+;;              20 collect armor on the dryer (done by stage 20)
+;;              30 log on the changing table  (done by stage 30; quest ends when 20+30)
+;;
+;; Coat and log are recorded even if the player finds them before reading the letter;
+;; reading it later then completes the matching objectives at once.
+;;
+;; refresh() derives the objective state from the stages and only changes what is not
+;; already right, so it is safe to call on every load.  That is also how a save that ran
+;; the first (two-objective) version is brought onto this layout.
+
+(defscript fcNCR_HandMeDown
+  "Places the courier's letters and runs the quest Something From The Past."
+  :extends Quest
+  :flags [:hidden]
+
+  (def Int TIMER_POLL 1 :const true)
+  (def Int TIMER_SCENE 2 :const true)
+
+  ;; NATICK_LOOSE_RUNTIME: keep pilot-era field names to adopt saved references.
+  (def ObjectReference pilot_natick_real_coat nil)
+  (def ObjectReference pilot_natick_real_helmet nil)
+  (def ObjectReference pilot_natick_real_log nil)
+  (def ObjectReference pilot_natick_real_shovel nil)
+  (def ObjectReference pilot_natick_preview_coat nil)
+  (def ObjectReference pilot_natick_preview_helmet nil)
+  (def ObjectReference pilot_natick_preview_log nil)
+  (def ObjectReference pilot_natick_preview_shovel nil)
+  (def Bool natick_scene_busy false)
+  (def Bool natick_shovel_placed false)
+  (def Bool natick_previews_retired false)
+  (def Int natick_scene_retries 0)
+
+  ;; Trail letters adopt the pilot-era references from earlier test builds so an
+  ;; existing save's already-placed paper is never duplicated or moved.
+  (def ObjectReference pilot_sanctuary_letter nil)
+  (def ObjectReference pilot_abernathy nil)
+  (def ObjectReference pilot_concord nil)
+  (def ObjectReference pilot_graygarden nil)
+  (def ObjectReference pilot_cambridge nil)
+  (def ObjectReference pilot_diamond nil)
+  (def ObjectReference pilot_hagen nil)
+  (def Bool trail_letters_busy false)
+
+  ;; Console-triggered pilot only; never called by startup or timers.
+  (defn place_cambridge_pilot [] None
+    (Debug.Notification "Cambridge pilot: station desk placement called")
+    (if (!= pilot_cambridge nil)
+      (do
+        (Debug.Notification "Pilot reference exists; moving it to the station desk")
+        (pilot_to_roof))
+      (let [[ObjectReference anchor (cast (Game.GetFormFromFile 0x0006ED04 "Fallout4.esm") ObjectReference)]
+            [Form paper (Game.GetFormFromFile 0x00000A10 "fallchildrens_ncr_armor_redux.esp")]]
+        (if (or (= anchor nil) (= paper nil))
+          (Debug.Notification "Pilot ERROR: desk anchor or paper form missing")
+          (do
+            (set! pilot_cambridge (.PlaceAtMe (Game.GetPlayer) paper 1 true true false))
+            (if (= pilot_cambridge nil)
+              (Debug.Notification "Pilot ERROR: PlaceAtMe returned None")
+              (pilot_to_roof)))))))
+
+  ;; Legacy helper name retained, but placement is now inside the station.
+  (defn pilot_to_roof [] None
+    (let [[ObjectReference anchor (cast (Game.GetFormFromFile 0x0006ED04 "Fallout4.esm") ObjectReference)]]
+      (when (and (!= pilot_cambridge nil) (!= anchor nil))
+        (.MoveTo pilot_cambridge anchor 12.0 -8.0 60.0 false)
+        (.SetAngle pilot_cambridge 0.0 0.0 0.0)
+        (.Enable pilot_cambridge false)
+        (Debug.Notification (str "Pilot station desk reference: " pilot_cambridge))
+        (Debug.Trace (str "Pilot station desk reference: " pilot_cambridge)))))
+
+  (defn pilot_at_player [] None
+    (Debug.Notification "Cambridge pilot v2: player placement called")
+    (when (= pilot_cambridge nil)
+      (let [[Form paper (Game.GetFormFromFile 0x00000A10 "fallchildrens_ncr_armor_redux.esp")]]
+        (if (= paper nil)
+          (Debug.Notification "Pilot ERROR: paper BOOK missing")
+          (set! pilot_cambridge (.PlaceAtMe (Game.GetPlayer) paper 1 true true false)))))
+    (if (= pilot_cambridge nil)
+      (Debug.Notification "Pilot ERROR: no spawned reference")
+      (do
+        (.MoveTo pilot_cambridge (Game.GetPlayer) 0.0 0.0 60.0 false)
+        (.SetAngle pilot_cambridge 0.0 0.0 0.0)
+        (.Enable pilot_cambridge false)
+        (Debug.Notification (str "Pilot moved above your feet: " pilot_cambridge)))))
+
+  ;; Compatibility console commands; Natick placement is automatic.
+  (defn place_natick_pilot [] None
+    (stock_natick)
+    (request_natick_scene)
+    (Debug.Notification "Natick real scene reconciled; collected items are not respawned"))
+
+  (defn preview_natick_pilot [] None
+    (Debug.Notification "Natick preview retired: real placement is now automatic"))
+
+  (defn pilot_shovel_at_player [] None
+    (Debug.Notification "Preview shovel retired; real shovel is beside the machines"))
+
+  (defn place_abernathy_pilot [] None
+    (Debug.Notification "Abernathy pilot: red workshop bench")
+    (let [[ObjectReference anchor (cast (Game.GetFormFromFile 0x0006F5C5 "Fallout4.esm") ObjectReference)]
+          [Form paper (Game.GetFormFromFile 0x00000A11 "fallchildrens_ncr_armor_redux.esp")]]
+      (if (or (= anchor nil) (= paper nil))
+        (Debug.Notification "Abernathy ERROR: workshop bench or paper form missing")
+        (if (or (.IsDisabled anchor) (.IsDeleted anchor))
+          (Debug.Notification "Abernathy ERROR: workshop bench removed or disabled")
+          (do
+            (when (= pilot_abernathy nil)
+              (set! pilot_abernathy (.PlaceAtMe (Game.GetPlayer) paper 1 true true false)))
+            (if (= pilot_abernathy nil)
+              (Debug.Notification "Abernathy ERROR: spawn failed")
+              (if (!= (.GetContainer pilot_abernathy) nil)
+                (Debug.Notification "Abernathy letter already in inventory; not duplicating it")
+                (do
+                  (let [[Float heading (.GetAngleZ anchor)]
+                        [Float dx (+ (* -40.0 (Math.Cos heading)) (* -28.0 (Math.Sin heading)))]
+                        [Float dy (- (* -28.0 (Math.Cos heading)) (* -40.0 (Math.Sin heading)))]]
+                    (.MoveTo pilot_abernathy anchor dx dy 60.0 false)
+                    (.SetAngle pilot_abernathy 0.0 0.0 heading))
+                  (.Enable pilot_abernathy false)
+                  (Debug.Notification (str "Abernathy letter placed: " pilot_abernathy))))))))))
+
+  (defn position_concord_pilot [[ObjectReference anchor]] None
+    (if (= (.GetContainer pilot_concord) nil)
+      (do
+        (.MoveTo pilot_concord anchor -30.0 8.0 58.0 false)
+        (.SetAngle pilot_concord 0.0 0.0 (.GetAngleZ anchor))
+        (.Enable pilot_concord false)
+        (Debug.Notification "Concord letter: desk beside Sturges terminal"))
+      (Debug.Notification "Concord letter already in inventory; not duplicating it")))
+
+  (defn place_concord_pilot [] None
+    (let [[ObjectReference anchor (cast (Game.GetFormFromFile 0x0003F403 "Fallout4.esm") ObjectReference)]
+          [Form paper (Game.GetFormFromFile 0x00000A12 "fallchildrens_ncr_armor_redux.esp")]]
+      (if (or (= anchor nil) (= paper nil))
+        (Debug.Notification "Concord ERROR: desk or paper missing")
+        (if (or (.IsDisabled anchor) (.IsDeleted anchor))
+          (Debug.Notification "Concord ERROR: desk disabled or removed")
+          (do
+            (when (= pilot_concord nil)
+              (set! pilot_concord (.PlaceAtMe (Game.GetPlayer) paper 1 true true false)))
+            (if (= pilot_concord nil)
+              (Debug.Notification "Concord ERROR: spawn failed")
+              (position_concord_pilot anchor)))))))
+
+  (defn place_graygarden_pilot [] None
+    (Debug.Notification "Graygarden pilot: red workshop bench")
+    (let [[ObjectReference anchor (cast (Game.GetFormFromFile 0x0009B18F "Fallout4.esm") ObjectReference)]
+          [Form paper (Game.GetFormFromFile 0x00000A13 "fallchildrens_ncr_armor_redux.esp")]]
+      (if (or (= anchor nil) (= paper nil))
+        (Debug.Notification "Graygarden ERROR: workshop bench or paper form missing")
+        (if (or (.IsDisabled anchor) (.IsDeleted anchor))
+          (Debug.Notification "Graygarden ERROR: workshop bench removed or disabled")
+          (do
+            (when (= pilot_graygarden nil)
+              (set! pilot_graygarden (.PlaceAtMe (Game.GetPlayer) paper 1 true true false)))
+            (if (= pilot_graygarden nil)
+              (Debug.Notification "Graygarden ERROR: spawn failed")
+              (if (!= (.GetContainer pilot_graygarden) nil)
+                (Debug.Notification "Graygarden letter already in inventory; not duplicating it")
+                (do
+                  (let [[Float heading (.GetAngleZ anchor)]
+                        [Float dx (+ (* -40.0 (Math.Cos heading)) (* -28.0 (Math.Sin heading)))]
+                        [Float dy (- (* -28.0 (Math.Cos heading)) (* -40.0 (Math.Sin heading)))]]
+                    (.MoveTo pilot_graygarden anchor dx dy 60.0 false)
+                    (.SetAngle pilot_graygarden 0.0 0.0 heading))
+                  (.Enable pilot_graygarden false)
+                  (Debug.Notification (str "Graygarden letter placed: " pilot_graygarden))))))))))
+
+  (defn place_diamond_pilot [] None
+    (let [[ObjectReference anchor (cast (Game.GetFormFromFile 0x001395C6 "Fallout4.esm") ObjectReference)]
+          [Form paper (Game.GetFormFromFile 0x00000A14 "fallchildrens_ncr_armor_redux.esp")]]
+      (if (or (= anchor nil) (= paper nil))
+        (Debug.Notification "Diamond City ERROR: bed or paper missing")
+        (if (or (.IsDisabled anchor) (.IsDeleted anchor))
+          (Debug.Notification "Diamond City ERROR: rented bed disabled or removed")
+          (do
+            (when (= pilot_diamond nil)
+              (set! pilot_diamond (.PlaceAtMe (Game.GetPlayer) paper 1 true true false)))
+            (if (= pilot_diamond nil)
+              (Debug.Notification "Diamond City ERROR: spawn failed")
+              (if (!= (.GetContainer pilot_diamond) nil)
+                (Debug.Notification "Diamond City letter already in inventory; not duplicating it")
+                (do
+                  (.MoveTo pilot_diamond anchor 0.0 0.0 42.0 false)
+                  (.SetAngle pilot_diamond 0.0 0.0 (.GetAngleZ anchor))
+                  (.Enable pilot_diamond false)
+                  (Debug.Notification "Diamond City letter: rented bed, Dugout Inn upstairs")))))))))
+
+  (defn place_hagen_pilot [] None
+    (let [[ObjectReference anchor (cast (Game.GetFormFromFile 0x001A7421 "Fallout4.esm") ObjectReference)]
+          [Form paper (Game.GetFormFromFile 0x00000A15 "fallchildrens_ncr_armor_redux.esp")]]
+      (if (or (= anchor nil) (= paper nil))
+        (Debug.Notification "Fort Hagen ERROR: register counter or paper missing")
+        (if (or (.IsDisabled anchor) (.IsDeleted anchor))
+          (Debug.Notification "Fort Hagen ERROR: counter or register disabled")
+          (do
+            (when (= pilot_hagen nil)
+              (set! pilot_hagen (.PlaceAtMe (Game.GetPlayer) paper 1 true true false)))
+            (if (= pilot_hagen nil)
+              (Debug.Notification "Fort Hagen ERROR: spawn failed")
+              (if (!= (.GetContainer pilot_hagen) nil)
+                (Debug.Notification "Fort Hagen letter already in inventory; not duplicating it")
+                (do
+                  (.MoveTo pilot_hagen anchor 35.0 0.0 1.0 false)
+                  (.SetAngle pilot_hagen 0.0 0.0 0.0)
+                  (.Enable pilot_hagen false)
+                  (Debug.Notification "Fort Hagen letter: station counter by the register")))))))))
+
+  ;; ---- forms (file-local ids; the plugin is an ESL, so only the low 12 bits count) --
+  ;; Paper letter (BOOK). The old holotape NOTE is only kept for save migration.
+  (defn letter_form [] Form
+    (Game.GetFormFromFile 0x00000A16 "fallchildrens_ncr_armor_redux.esp"))
+
+  (defn legacy_letter_form [] Form
+    (Game.GetFormFromFile 0x000009A2 "fallchildrens_ncr_armor_redux.esp"))
+
+  (defn coat_form [] Form
+    (Game.GetFormFromFile 0x000008F8 "fallchildrens_ncr_armor_redux.esp"))
+
+  (defn helmet_form [] Form
+    (Game.GetFormFromFile 0x000008B1 "fallchildrens_ncr_armor_redux.esp"))
+
+  (defn log_form [] Form
+    (Game.GetFormFromFile 0x00000940 "fallchildrens_ncr_armor_redux.esp"))
+
+  (defn abernathy_form [] Form
+    (Game.GetFormFromFile 0x00000A11 "fallchildrens_ncr_armor_redux.esp"))
+
+  (defn concord_form [] Form
+    (Game.GetFormFromFile 0x00000A12 "fallchildrens_ncr_armor_redux.esp"))
+
+  (defn graygarden_form [] Form
+    (Game.GetFormFromFile 0x00000A13 "fallchildrens_ncr_armor_redux.esp"))
+
+  (defn cambridge_form [] Form
+    (Game.GetFormFromFile 0x00000A10 "fallchildrens_ncr_armor_redux.esp"))
+
+  (defn diamond_form [] Form
+    (Game.GetFormFromFile 0x00000A14 "fallchildrens_ncr_armor_redux.esp"))
+
+  (defn hagen_form [] Form
+    (Game.GetFormFromFile 0x00000A15 "fallchildrens_ncr_armor_redux.esp"))
+
+  ;; ---- placement -------------------------------------------------------------------
+  ;; The old Sanctuary mailbox is destructible, so the letter lives on the kitchen
+  ;; table in the Sole Survivor's house (vanilla STAT 000A2C54). On existing saves an
+  ;; uncollected mailbox copy (paper BOOK or legacy holotape) is removed and replaced
+  ;; by the kitchen letter, so there is never more than one.
+  (defn migrate_letter_from_mailbox [] None
+    ;; Only retire the mailbox copies AFTER a kitchen reference exists.
+    (when (and (!= pilot_sanctuary_letter nil) (not (GetStageDone 10)))
+      (let [[ObjectReference player (Game.GetPlayer)]
+            [Form paper (letter_form)]
+            [Form tape (legacy_letter_form)]]
+        (unless (or (> (.GetItemCount player paper) 0)
+                    (> (.GetItemCount player tape) 0))
+          (let [[ObjectReference box (cast (Game.GetFormFromFile 0x000A8826 "Fallout4.esm") ObjectReference)]]
+            (when (!= box nil)
+              (when (> (.GetItemCount box paper) 0)
+                (.RemoveItem box paper 1 true))
+              (when (> (.GetItemCount box tape) 0)
+                (.RemoveItem box tape 1 true))))))))
+
+  ;; ---- the trail letters --------------------------------------------------------------
+  ;; Same approved positions as the pilot commands. placement is automatic, but an
+  ;; existing reference is never moved: it may already have been picked up or
+  ;; dropped deliberately. Offsets are anchor-local. With use_heading the XY offset
+  ;; is rotated by the anchor's current heading and the letter faces that heading;
+  ;; otherwise the offset is world-aligned and the fixed angles are used.
+  (defn ensure_trail_letter [[ObjectReference placed] [Form item] [Int anchor_id]
+                            [Float x] [Float y] [Float z] [Float fixed_az]
+                            [Int mode]] ObjectReference
+    (when (and (!= item nil) (= placed nil))
+      (let [[ObjectReference anchor (cast (Game.GetFormFromFile anchor_id "Fallout4.esm") ObjectReference)]]
+        (when (and (!= anchor nil) (not (.IsDisabled anchor)) (not (.IsDeleted anchor)))
+          (if (> (.GetItemCount (Game.GetPlayer) item) 0)
+            nil
+            (when (.Is3DLoaded anchor)
+              (set! placed (.PlaceAtMe anchor item 1 true true false))
+              (when (!= placed nil)
+                ;; mode 0: world-aligned offset, fixed angle.
+                ;; mode 1: world-aligned offset, angle follows the anchor.
+                ;; mode 2: offset rotated into the anchor's heading, angle follows it.
+                (if (= mode 0)
+                  (do
+                    (.MoveTo placed anchor x y z false)
+                    (.SetAngle placed 0.0 0.0 fixed_az))
+                  (let [[Float heading (.GetAngleZ anchor)]]
+                    (if (= mode 2)
+                      (let [[Float dx (+ (* x (Math.Cos heading)) (* y (Math.Sin heading)))]
+                            [Float dy (- (* y (Math.Cos heading)) (* x (Math.Sin heading)))]]
+                        (.MoveTo placed anchor dx dy z false))
+                      (.MoveTo placed anchor x y z false))
+                    (.SetAngle placed 0.0 0.0 heading)))
+                (.Enable placed false)
+                (Debug.Trace (str "fcNCR: trail letter placed at " anchor_id))))))))
+    placed)
+
+  ;; World-position kitchen candidate supplied in game by the player. Only spawn
+  ;; nearby in the Commonwealth, so MoveTo uses the correct world and loaded 3D.
+  ;; Never move an existing loose copy except through the explicit test command.
+  (defn place_sanctuary_letter [[Bool reposition]] None
+    (let [[ObjectReference player (Game.GetPlayer)]
+          [WorldSpace commonwealth (cast (Game.GetFormFromFile 0x0000003C "Fallout4.esm") WorldSpace)]]
+      (when (and (= (.GetWorldSpace player) commonwealth)
+                 (< (Math.Abs (- (.GetPositionX player) -80130.41)) 1200.0)
+                 (< (Math.Abs (- (.GetPositionY player) 91440.67)) 1200.0)
+                 (< (Math.Abs (- (.GetPositionZ player) 7940.51)) 500.0)
+                 (not (GetStageDone 10))
+                 (= (.GetItemCount player (letter_form)) 0)
+                 (= (.GetItemCount player (legacy_letter_form)) 0))
+        (when (= pilot_sanctuary_letter nil)
+          (set! pilot_sanctuary_letter (.PlaceAtMe player (letter_form) 1 true true false))
+          (set! reposition true))
+        (when (and reposition (!= pilot_sanctuary_letter nil)
+                   (= (.GetContainer pilot_sanctuary_letter) nil))
+          (.Disable pilot_sanctuary_letter false)
+          (.MoveTo pilot_sanctuary_letter player
+            (- -80130.41 (.GetPositionX player))
+            (- 91440.67 (.GetPositionY player))
+            (- 7940.51 (.GetPositionZ player)) false)
+          (.SetAngle pilot_sanctuary_letter 0.0 0.0 0.0)
+          (.Enable pilot_sanctuary_letter false)
+          (unless (GetStageDone 5) (SetStage 5))))))
+
+  (defn place_sanctuary_pilot [] None
+    (place_sanctuary_letter true)
+    (sanctuary_status))
+
+  (defn place_trail_letters [] None
+    (unless trail_letters_busy
+      (set! trail_letters_busy true)
+      (place_sanctuary_letter false)
+      (migrate_letter_from_mailbox)
+      (set! pilot_abernathy
+        (ensure_trail_letter pilot_abernathy (abernathy_form) 0x0006F5C5
+          -40.0 -28.0 60.0 0.0 2))
+      (set! pilot_concord
+        (ensure_trail_letter pilot_concord (concord_form) 0x0003F403
+          -30.0 8.0 58.0 0.0 1))
+      (set! pilot_graygarden
+        (ensure_trail_letter pilot_graygarden (graygarden_form) 0x0009B18F
+          -40.0 -28.0 60.0 0.0 2))
+      (set! pilot_cambridge
+        (ensure_trail_letter pilot_cambridge (cambridge_form) 0x0006ED04
+          12.0 -8.0 60.0 0.0 0))
+      (set! pilot_diamond
+        (ensure_trail_letter pilot_diamond (diamond_form) 0x001395C6
+          0.0 0.0 42.0 0.0 1))
+      (set! pilot_hagen
+        (ensure_trail_letter pilot_hagen (hagen_form) 0x001A7421
+          35.0 0.0 1.0 0.0 0))
+      (set! trail_letters_busy false)))
+
+  ;; ---- the Natick items --------------------------------------------------------------
+  (defn natick_ref [[Int id]] ObjectReference
+    (cast (Game.GetFormFromFile id "Fallout4.esm") ObjectReference))
+
+  ;; Delete only retained preview world objects. Inventory-held test copies stay
+  ;; labelled and harmless; never remove a player's real equipment or shovel.
+  (defn retire_preview [[ObjectReference preview]] None
+    (when (and (!= preview nil) (= (.GetContainer preview) nil))
+      (.Disable preview false)
+      (.Delete preview)))
+
+  (defn retire_natick_previews [] None
+    (unless natick_previews_retired
+      (retire_preview pilot_natick_preview_coat)
+      (retire_preview pilot_natick_preview_helmet)
+      (retire_preview pilot_natick_preview_log)
+      (retire_preview pilot_natick_preview_shovel)
+      (set! pilot_natick_preview_coat (cast nil ObjectReference))
+      (set! pilot_natick_preview_helmet (cast nil ObjectReference))
+      (set! pilot_natick_preview_log (cast nil ObjectReference))
+      (set! pilot_natick_preview_shovel (cast nil ObjectReference))
+      (set! natick_previews_retired true)))
+
+  ;; Never re-position an existing reference during automatic reconciliation.
+  ;; Someone may have moved, carried, stored or dropped it deliberately.
+  (defn ensure_natick_item [[ObjectReference placed] [Form item]
+                           [ObjectReference anchor] [Int taken_stage]
+                           [Float dx] [Float dy] [Float dz]
+                           [Float ax] [Float ay] [Float az]] ObjectReference
+    (when (and (!= item nil) (!= anchor nil) (= placed nil))
+      (if (> (.GetItemCount (Game.GetPlayer) item) 0)
+        (note_fact taken_stage)
+        (when (and (not (GetStageDone taken_stage)) (.Is3DLoaded anchor))
+          (if (> (.GetItemCount anchor item) 0)
+            ;; Transfer the actual old item, retaining its mods. If DropObject
+            ;; fails, retry later; do NOT create a potentially duplicate copy.
+            (set! placed (.DropObject anchor item 1))
+            (set! placed (.PlaceAtMe anchor item 1 true true false)))
+          (when (!= placed nil)
+            (.Disable placed false)
+            (.MoveTo placed anchor dx dy dz false)
+            (.SetAngle placed ax ay az)
+            (.Enable placed false)
+            (Debug.Trace (str "fcNCR: loose Natick item placed for stage " taken_stage))))))
+    placed)
+
+  (defn stock_natick [] None
+    (unless natick_scene_busy
+      (set! natick_scene_busy true)
+      (retire_natick_previews)
+      (let [[ObjectReference dryer (natick_ref 0x0018B8BE)]
+            [ObjectReference table (natick_ref 0x0018BAE8)]]
+        (set! pilot_natick_real_coat
+          (ensure_natick_item pilot_natick_real_coat (coat_form) dryer 20
+            10.690151 5.451667 81.0 0.0 0.0 332.979736))
+        (set! pilot_natick_real_helmet
+          (ensure_natick_item pilot_natick_real_helmet (helmet_form) dryer 25
+            -16.035226 -8.177501 81.0 0.0 0.0 332.979736))
+        (set! pilot_natick_real_log
+          (ensure_natick_item pilot_natick_real_log (log_form) table 30
+            0.0 0.0 74.0 0.0 0.0 245.225921))
+        ;; A saved flag also guards the generic shovel if its reference later
+        ;; disappears. Owning any other vanilla shovel is irrelevant.
+        (if (!= pilot_natick_real_shovel nil)
+          (set! natick_shovel_placed true)
+          (when (and (not natick_shovel_placed) (!= dryer nil) (.Is3DLoaded dryer))
+            (let [[Form shovel (Game.GetFormFromFile 0x000822CB "Fallout4.esm")]]
+              (when (!= shovel nil)
+                (set! pilot_natick_real_shovel (.PlaceAtMe dryer shovel 1 true true false))
+                (when (!= pilot_natick_real_shovel nil)
+                  (.MoveTo pilot_natick_real_shovel dryer -85.163320 23.920890 12.0 false)
+                  (.SetAngle pilot_natick_real_shovel 90.0 0.0 242.979736)
+                  (.Enable pilot_natick_real_shovel false)
+                  (set! natick_shovel_placed true)))))))
+      (set! natick_scene_busy false)))
+
+  ;; Location/load events can precede 3D loading. Bounded delayed retries also
+  ;; let completed saves acquire the decorative shovel without endless polling.
+  (defn request_natick_scene [] None
+    (set! natick_scene_retries 6)
+    (StartTimer 1.0 TIMER_SCENE))
+
+  ;; Blocking diagnostic, not fleeting notifications. No obsolete table dependency.
+  (defn sanctuary_status [] None
+    (let [[ObjectReference player (Game.GetPlayer)]
+          [WorldSpace commonwealth (cast (Game.GetFormFromFile 0x0000003C "Fallout4.esm") WorldSpace)]]
+      (Debug.MessageBox (str "Kitchen v3 - PLAYER (1/2)"
+        "\nRunning: " (IsRunning) " / collected: " (GetStageDone 10)
+        "\nIn Commonwealth: " (= (.GetWorldSpace player) commonwealth)
+        "\nX: " (.GetPositionX player)
+        "\nY: " (.GetPositionY player)
+        "\nZ: " (.GetPositionZ player)
+        "\nTarget: -80130.41, 91440.67, 7940.51"))
+      (if (= pilot_sanctuary_letter nil)
+        (Debug.MessageBox "Kitchen v3 - LETTER (2/2): no retained reference")
+        (Debug.MessageBox (str "Kitchen v3 - LETTER (2/2)"
+          "\nForm ID (decimal): " (.GetFormID pilot_sanctuary_letter)
+          "\nDisabled: " (.IsDisabled pilot_sanctuary_letter)
+          " / deleted: " (.IsDeleted pilot_sanctuary_letter)
+          "\nIn container: " (!= (.GetContainer pilot_sanctuary_letter) nil)
+          "\nSame cell as player: " (= (.GetParentCell pilot_sanctuary_letter) (.GetParentCell player))
+          "\nX: " (.GetPositionX pilot_sanctuary_letter)
+          "\nY: " (.GetPositionY pilot_sanctuary_letter)
+          "\nZ: " (.GetPositionZ pilot_sanctuary_letter))))))
+
+  ;; ---- progress by inspection --------------------------------------------------------
+  ;; The letter, coat, helmet and log are ordinary items; carrying one is the whole
+  ;; condition for its stage.  This also migrates a save whose stages were missed.
+  (defn poll [] None
+    (let [[ObjectReference player (Game.GetPlayer)]]
+      (when (or (> (.GetItemCount player (letter_form)) 0)
+                (> (.GetItemCount player (legacy_letter_form)) 0)) (note_fact 10))
+      (when (> (.GetItemCount player (abernathy_form)) 0) (note_fact 11))
+      (when (> (.GetItemCount player (concord_form)) 0) (note_fact 12))
+      (when (> (.GetItemCount player (graygarden_form)) 0) (note_fact 13))
+      (when (> (.GetItemCount player (cambridge_form)) 0) (note_fact 14))
+      (when (> (.GetItemCount player (diamond_form)) 0) (note_fact 16))
+      (when (> (.GetItemCount player (hagen_form)) 0) (note_fact 17))
+      (when (> (.GetItemCount player (coat_form)) 0) (note_fact 20))
+      (when (> (.GetItemCount player (helmet_form)) 0) (note_fact 25))
+      (when (> (.GetItemCount player (log_form)) 0) (note_fact 30)))
+    (check_arrival)
+    (refresh))
+
+  ;; ---- objectives ------------------------------------------------------------------
+  (defn show_objective [[Int obj]] None
+    (unless (IsObjectiveDisplayed obj)
+      (SetObjectiveDisplayed obj true)))
+
+  (defn complete_objective [[Int obj]] None
+    (unless (IsObjectiveCompleted obj)
+      (SetObjectiveCompleted obj true)))
+
+  (defn finish [] None
+    (unless (GetStageDone 40)
+      (SetStage 40)
+      (Game.RewardPlayerXP 100)
+      (Debug.Trace "fcNCR_HandMeDown: quest finished"))
+    (unless (IsCompleted)
+      (CompleteQuest)))
+
+  (defn has_any_find [] Bool
+    (or (GetStageDone 10) (GetStageDone 11) (GetStageDone 12)
+        (GetStageDone 13) (GetStageDone 14) (GetStageDone 16)
+        (GetStageDone 17) (GetStageDone 20) (GetStageDone 25) (GetStageDone 30)))
+
+  ;; Furthest discovered breadcrumb wins. No earlier letter is mandatory.
+  ;; Gear/log finds already establish the ending location; helmet is optional,
+  ;; preserving the original completion rule (coat + log, one XP reward).
+  (defn next_hunt_objective [] Int
+    (cond
+      (and (GetStageDone 20) (GetStageDone 30)) 0
+      (GetStageDone 20) 30
+      (or (GetStageDone 25) (GetStageDone 30) (GetStageDone 15)) 20
+      (GetStageDone 17) 10
+      (GetStageDone 16) 17
+      (GetStageDone 14) 16
+      (GetStageDone 13) 14
+      (GetStageDone 12) 13
+      (GetStageDone 11) 12
+      (GetStageDone 10) 11
+      :else 0))
+
+  (defn sync_hunt_objective [[Int obj] [Int wanted]] None
+    (if (= obj wanted)
+      (show_objective obj)
+      (when (and (IsObjectiveDisplayed obj) (not (IsObjectiveCompleted obj)))
+        (SetObjectiveDisplayed obj false))))
+
+  (defn refresh [] None
+    (when (and (has_any_find) (not (IsCompleted)))
+      ;; Complete actual finds only; skipped earlier letters remain optional,
+      ;; hidden rather than falsely recorded as collected.
+      (when (GetStageDone 10) (complete_objective 18))
+      (when (GetStageDone 11) (complete_objective 11))
+      (when (GetStageDone 12) (complete_objective 12))
+      (when (GetStageDone 13) (complete_objective 13))
+      (when (GetStageDone 14) (complete_objective 14))
+      (when (GetStageDone 16) (complete_objective 16))
+      (when (GetStageDone 17) (complete_objective 17))
+      (when (or (GetStageDone 15) (GetStageDone 20) (GetStageDone 25) (GetStageDone 30))
+        (complete_objective 10))
+      (when (GetStageDone 20) (complete_objective 20))
+      (when (GetStageDone 30) (complete_objective 30))
+      (let [[Int wanted (next_hunt_objective)]]
+        (sync_hunt_objective 18 wanted)
+        (sync_hunt_objective 11 wanted)
+        (sync_hunt_objective 12 wanted)
+        (sync_hunt_objective 13 wanted)
+        (sync_hunt_objective 14 wanted)
+        (sync_hunt_objective 16 wanted)
+        (sync_hunt_objective 17 wanted)
+        (sync_hunt_objective 10 wanted)
+        (sync_hunt_objective 20 wanted)
+        (sync_hunt_objective 30 wanted))
+      (when (and (GetStageDone 20) (GetStageDone 30))
+        (finish))))
+
+  (defn is_letter_stage [[Int stage]] Bool
+    (or (= stage 10) (= stage 11) (= stage 12) (= stage 13)
+        (= stage 14) (= stage 16) (= stage 17)))
+
+  ;; Make actual finds visible in journal history, even when they were optional
+  ;; earlier clues. Complete BEFORE displaying so they never become active leads.
+  (defn record_letter_history [[Int stage]] None
+    (let [[Int obj stage]]
+      (when (= stage 10) (set! obj 18))
+      (complete_objective obj)
+      (show_objective obj)))
+
+  (defn refresh_letter_history [] None
+    (when (GetStageDone 10) (record_letter_history 10))
+    (when (GetStageDone 11) (record_letter_history 11))
+    (when (GetStageDone 12) (record_letter_history 12))
+    (when (GetStageDone 13) (record_letter_history 13))
+    (when (GetStageDone 14) (record_letter_history 14))
+    (when (GetStageDone 16) (record_letter_history 16))
+    (when (GetStageDone 17) (record_letter_history 17)))
+
+  (defn all_letters_found [] Bool
+    (and (GetStageDone 10) (GetStageDone 11) (GetStageDone 12)
+         (GetStageDone 13) (GetStageDone 14) (GetStageDone 16) (GetStageDone 17)))
+
+  ;; Optional letters still earn credit after the main quest is completed.
+  ;; Inventory events are unreliable here, so keep a slower fallback scan until
+  ;; all seven are found. Once both hunt and letters are done, stop the timer.
+  (defn schedule_hunt_poll [] None
+    (if (IsCompleted)
+      (unless (all_letters_found) (StartTimer 10.0 TIMER_POLL))
+      (StartTimer 3.0 TIMER_POLL)))
+
+  (defn note_fact [[Int stage]] None
+    (unless (GetStageDone stage)
+      ;; Persist collection before paying XP; reloading, dropping/recollecting,
+      ;; repeated polling, and the legacy Sanctuary tape cannot pay twice.
+      (SetStage stage)
+      (when (is_letter_stage stage)
+        (record_letter_history stage)
+        (Game.RewardPlayerXP 10))
+      (Debug.Trace (str "fcNCR_HandMeDown: stage " stage))
+      ;; Any first find reveals the hunt; do not require Sanctuary first.
+      (unless (IsCompleted)
+        (SetActive true))
+      (refresh)))
+
+  ;; Arrival only counts after the letter has been read, so having walked through Natick
+  ;; long ago does not complete the first objective the moment the quest starts.
+  (defn check_arrival [] None
+    (when (and (GetStageDone 17) (not (GetStageDone 15)))
+      (let [[Location natick (cast (Game.GetFormFromFile 0x0008BDB2 "Fallout4.esm") Location)]]
+        (when (and (!= natick nil) (.IsInLocation (Game.GetPlayer) natick))
+          (note_fact 15)))))
+
+  ;; ---- startup / events ------------------------------------------------------------
+  ;; Registrations for the remote events below are appended to startup automatically.
+  (defn startup [] None
+    ;; Without a filter a script receives NO inventory events.  Filters are per script
+    ;; and idempotent, so re-adding them on every load is harmless.
+    (AddInventoryEventFilter (letter_form))
+    (AddInventoryEventFilter (legacy_letter_form))
+    (AddInventoryEventFilter (abernathy_form))
+    (AddInventoryEventFilter (concord_form))
+    (AddInventoryEventFilter (graygarden_form))
+    (AddInventoryEventFilter (cambridge_form))
+    (AddInventoryEventFilter (diamond_form))
+    (AddInventoryEventFilter (hagen_form))
+    (AddInventoryEventFilter (coat_form))
+    (AddInventoryEventFilter (helmet_form))
+    (AddInventoryEventFilter (log_form))
+    (migrate_letter_from_mailbox)
+    (place_trail_letters)
+    (poll)
+    (stock_natick)
+    (request_natick_scene)
+    (refresh_letter_history)
+    (refresh)
+    (schedule_hunt_poll))
+
+  (defevent OnQuestInit []
+    (startup))
+
+  ;; Pickup fallback: 3 seconds while active, 10 seconds after completion while
+  ;; optional letters remain. Stops once both quest and all letters are complete.
+  (defevent OnTimer [aiTimerID]
+    (when (= aiTimerID TIMER_SCENE)
+      (place_trail_letters)
+      (stock_natick)
+      (set! natick_scene_retries (- natick_scene_retries 1))
+      (when (> natick_scene_retries 0)
+        (StartTimer 2.0 TIMER_SCENE)))
+    (when (= aiTimerID TIMER_POLL)
+      (poll)
+      (unless (IsCompleted)
+        (place_trail_letters)
+        (stock_natick))
+      (schedule_hunt_poll)))
+
+  (defremote on_player_load
+    :from (Game.GetPlayer)
+    :unregister false
+    :event OnPlayerLoadGame
+    [sender]
+    (startup))
+
+  ;; Reconcile loose placement after location changes and notice arriving in Natick.
+  ;; Existing references are never moved/restocked by this reconciliation.
+  (defremote on_location_change
+    :from (Game.GetPlayer)
+    :unregister false
+    :event OnLocationChange
+    [sender old_loc new_loc]
+    (migrate_letter_from_mailbox)
+    (place_trail_letters)
+    (poll)
+    (stock_natick)
+    (request_natick_scene)
+    (check_arrival))
+
+  (defremote on_item_added
+    :from (Game.GetPlayer)
+    :unregister false
+    :event OnItemAdded
+    [sender base_item item_count item_ref source]
+    (cond
+      (= base_item (letter_form)) (note_fact 10)
+      (= base_item (legacy_letter_form)) (note_fact 10)
+      (= base_item (abernathy_form))   (note_fact 11)
+      (= base_item (concord_form))     (note_fact 12)
+      (= base_item (graygarden_form))  (note_fact 13)
+      (= base_item (cambridge_form))   (note_fact 14)
+      (= base_item (diamond_form))     (note_fact 16)
+      (= base_item (hagen_form))       (note_fact 17)
+      (= base_item (coat_form))   (note_fact 20)
+      (= base_item (helmet_form)) (note_fact 25)
+      (= base_item (log_form))    (note_fact 30))))
