@@ -30,7 +30,7 @@ TOOLS   := $(BUILD)/toolchain
 SCRIPTS := $(BUILD)/scripts
 STAGE   := $(BUILD)/package
 BA2     := fallchildrens_ncr_armor_redux - Main.ba2
-FO4TOOLS_ROOT ?= ../fo4tools
+FO4TOOLS_ROOT ?= third_party/fo4tools
 PYTHON := PYTHONPATH="$(abspath $(FO4TOOLS_ROOT)):$$PYTHONPATH" python3
 DIST    := dist/$(NAME)-$(VERSION).7z
 
@@ -65,7 +65,7 @@ $(SCRIPTS)/fcNCR_HandMeDown.pex: $(SRC) $(JEZEBEL) $(FLAGS)
 	test -f $@
 	test -f $(SCRIPTS)/fcNCR_HandMeDown.psc
 
-package: pex $(ESP)
+package: pex $(ESP) $(STAMP)/submodules
 	rm -rf $(STAGE) $(BUILD)/archive-input
 	mkdir -p $(STAGE) $(BUILD)/archive-input/Scripts
 	cp $(ESP) $(STAGE)/

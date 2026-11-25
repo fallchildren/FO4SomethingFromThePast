@@ -1,3 +1,6 @@
 [submodule "third_party/f4se"]
 	path = third_party/f4se
 	url = https://github.com/ianpatt/f4se
+[submodule "third_party/fo4tools"]
+	path = third_party/fo4tools
+	url = https://github.com/fallchildren/fo4tools.git

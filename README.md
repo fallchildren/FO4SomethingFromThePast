@@ -99,10 +99,11 @@ placement logic. Neither depends on the experimental ESP builders. Internal
 If diary text changes, update the prebuilt BOOK/TERM records separately and
 verify their contents before packaging.
 
-Requires `git`, `make`, Python 3, `curl`, `7z`, and
-[fo4tools](https://github.com/fallchildren/fo4tools) available as a sibling checkout
-at `../fo4tools` (or set `FO4TOOLS_ROOT=/path/to/fo4tools`). The Makefile initializes
-the F4SE submodule and generates Papyrus headers in `build/headers/`. It uses
+Requires `git`, `make`, Python 3, `curl`, and `7z`.
+[fo4tools](https://github.com/fallchildren/fo4tools) is pinned as a submodule at
+`third_party/fo4tools` (override with `FO4TOOLS_ROOT=/path/to/fo4tools` if needed).
+Clone with `--recurse-submodules`, or let the Makefile initialize the pinned
+F4SE and fo4tools submodules. Papyrus headers are generated in `build/headers/`. It uses
 `../jezebel/bin/jezebel` when present, otherwise downloads the pinned Jezebel
 release. Override `JEZEBEL=/path/to/jezebel` or `HEADERS=...` when appropriate.
 
@@ -137,7 +138,8 @@ the packaged script with any older loose PEX disabled.
 ### Nexus upload workflow
 
 `.github/workflows/release.yml` builds on numbered tags or a manual Actions run.
-It checks out the pinned fo4tools commit, packages and verifies the mod, and retains
+Recursive checkout provides the pinned submodules without a separate fo4tools
+checkout or branch pull. The workflow packages and verifies the mod, and retains
 the 7z as a workflow artifact. Configure the repository secret
 `NEXUSMODS_API_KEY` to enable uploads to file ID `8446437` on mod ID
 `4943507469474`.
@@ -151,8 +153,8 @@ has no mod-page publishing step. Check the page remains unpublished afterward.
 Without the checkbox, a manual run only builds and retains the artifact.
 
 Numbered tag pushes also upload, update the mod version and select the primary
-download, matching the Muffled Helmets release flow. Ensure the pinned fo4tools
-commit is pushed before running the workflow. GitHub requires a manual-dispatch
+download, matching the Muffled Helmets release flow. Ensure the fo4tools commit
+referenced by the submodule is pushed before running the workflow. GitHub requires a manual-dispatch
 workflow to exist on the default branch before it appears in Actions.
 
 ## Credits and distribution
