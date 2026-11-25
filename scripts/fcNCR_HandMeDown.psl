@@ -526,8 +526,9 @@
 
   (defn finish [] None
     (unless (GetStageDone 40)
+      ;; Stage 40 is flagged Complete Quest. Its XNAM global supplies the
+      ;; native 100 XP reward; do not also pay via RewardPlayerXP here.
       (SetStage 40)
-      (Game.RewardPlayerXP 100)
       (Debug.Trace "fcNCR_HandMeDown: quest finished"))
     (unless (IsCompleted)
       (CompleteQuest)))

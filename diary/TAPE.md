@@ -2,8 +2,10 @@
 
 Source for the big holotape (NOTE fc_tape_diary), left on the changing table in the house right of the church in Natick. The coat and helmet are on top of the dryer, with the shovel beside the machines. Last find in the intended reading order; its entries are the earliest part of the courier's journey.
 One 'Year:' line sets the year for the dated entries that follow it; each entry is a
-date heading and then paragraphs.  Plain ASCII except the spaced dash, which the
-builder normalises.
+date heading and then paragraphs. Each nonblank prose line is a paragraph; terminal
+pages separate paragraphs with two newlines. Long entries use numbered continuation
+pages, split at paragraph boundaries. The prebuilt ESP must be updated separately
+when this source changes; the release packaging step does not render diary text.
 
 ---- BTXT ----
 

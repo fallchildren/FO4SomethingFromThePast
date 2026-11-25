@@ -16,16 +16,18 @@ courier's letter hunt across the Commonwealth.
    Do **not** enable their plugins.
 3. Keep those original asset BA2 archives registered in `Fallout4Custom.ini`.
    This merge does not bundle or replace them.
-4. Install the release with your mod manager, or extract its contents directly
-   into `Fallout 4/Data/`. The archive has no enclosing `Data` directory.
+4. Install the release with your mod manager, or extract it into your Fallout 4
+   game directory so its top-level `Data` folder merges with the game's `Data`
+   folder. Do not extract into `Data` itself and create a nested `Data/Data`.
 5. Load `Tactical Night Vision.esp` before
    `fallchildrens_ncr_armor_redux.esp`.
 
 The release contains these two runtime files:
 
 ```text
-fallchildrens_ncr_armor_redux.esp
-fallchildrens_ncr_armor_redux - Main.ba2
+Data/
+  fallchildrens_ncr_armor_redux.esp
+  fallchildrens_ncr_armor_redux - Main.ba2
 ```
 
 The plugin-named Main BA2 contains our compiled quest script. It is intended to
@@ -120,8 +122,8 @@ Output:
 ```text
 build/scripts/fcNCR_HandMeDown.pex
 build/scripts/fcNCR_HandMeDown.psc
-build/package/fallchildrens_ncr_armor_redux.esp
-build/package/fallchildrens_ncr_armor_redux - Main.ba2
+build/package/Data/fallchildrens_ncr_armor_redux.esp
+build/package/Data/fallchildrens_ncr_armor_redux - Main.ba2
 dist/somethingfromthepast-<version>.7z
 ```
 

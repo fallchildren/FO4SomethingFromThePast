@@ -67,14 +67,14 @@ $(SCRIPTS)/fcNCR_HandMeDown.pex: $(SRC) $(JEZEBEL) $(FLAGS)
 
 package: pex $(ESP) $(STAMP)/submodules
 	rm -rf $(STAGE) $(BUILD)/archive-input
-	mkdir -p $(STAGE) $(BUILD)/archive-input/Scripts
-	cp $(ESP) $(STAGE)/
+	mkdir -p $(STAGE)/Data $(BUILD)/archive-input/Scripts
+	cp $(ESP) $(STAGE)/Data/
 	cp $(SCRIPTS)/fcNCR_HandMeDown.pex $(BUILD)/archive-input/Scripts/
-	$(PYTHON) -m fo4tools.cli ba2 pack "$(STAGE)/$(BA2)" $(BUILD)/archive-input
-	$(PYTHON) tools/verify_archive.py "$(STAGE)/$(BA2)" $(SCRIPTS)/fcNCR_HandMeDown.pex
+	$(PYTHON) -m fo4tools.cli ba2 pack "$(STAGE)/Data/$(BA2)" $(BUILD)/archive-input
+	$(PYTHON) tools/verify_archive.py "$(STAGE)/Data/$(BA2)" $(SCRIPTS)/fcNCR_HandMeDown.pex
 	mkdir -p $(dir $(DIST))
 	rm -f $(DIST)
-	cd $(STAGE) && 7z a -t7z -mx=9 $(abspath $(DIST)) . >/dev/null
+	cd $(STAGE) && 7z a -t7z -mx=9 $(abspath $(DIST)) Data >/dev/null
 	7z t $(DIST) >/dev/null
 	@echo "created $(DIST)"
 
