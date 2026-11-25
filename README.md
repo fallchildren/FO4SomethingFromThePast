@@ -4,7 +4,8 @@ A Quest for Desert Ranger Armour
 
 Merged NCR Veteran Ranger armor for Fallout 4, with the Ranger Helmet Enhanced
 light system, independent visor tint and light slots, ballistic weave, and a
-courier's letter hunt across the Commonwealth.
+courier's letter hunt across the Commonwealth. Tactical Night Vision's screen
+tint follows the selected visor light colour.
 
 ## Install
 
@@ -43,6 +44,10 @@ Remove or disable the previous loose `Scripts/fcNCR_HandMeDown.pex` from this mo
 archived version. Do not remove scripts or archives belonging to other mods.
 Restart Fallout 4 before loading the save. No uninstall, quest reset or clean
 save is intended or required for this upgrade.
+
+After upgrading, remove and reinstall your chosen visor colour at a workbench.
+The colour keyword is applied by the visor OMOD, so an already-installed colour
+will not affect night vision until it is reapplied.
 
 The script name, quest/form identities and saved placement variables are
 preserved. Already-retained objects are not automatically moved; already-collected
